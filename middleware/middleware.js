@@ -80,7 +80,7 @@ const storage = multer.diskStorage({
     cb(null, "uploads/");
   },
   filename: async function (req, file, cb) {
-    if (req.body.pa_id) {
+    if (req.user.id) {
       const currentDate = new Date();
       const formattedDate = currentDate.toISOString().replace(/:/g, "-");
       const newFileName = `${formattedDate}-${req.body.pa_id}${path.extname(

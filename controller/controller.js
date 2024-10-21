@@ -96,7 +96,7 @@ exports.login = async (req, res) => {
 
 exports.all_doc = async (req, res) => {
   try {
-    const { date } = req.params; 
+    const { date } = req.params;
 
     if (!date) {
       return res.status(400).json({ message: "Date is required" });
@@ -121,7 +121,7 @@ exports.all_doc = async (req, res) => {
         ],
       ],
       having: Sequelize.where(Sequelize.literal("confirmedCount"), {
-        [Op.lt]: 14, 
+        [Op.lt]: 14,
       }),
     });
 
@@ -138,7 +138,8 @@ exports.all_doc = async (req, res) => {
 
 exports.disease = async (req, res) => {
   try {
-    const { doc_id, pa_id, time, status } = req.body;
+    const { doc_id, time } = req.body;
+    const pa_id = req.user.id;
     const imgPaths = req.body.newpaths;
     console.log("controller", imgPaths);
     console.log("controller", req.body.newpaths);
@@ -146,7 +147,7 @@ exports.disease = async (req, res) => {
       doc_id: doc_id,
       patient_id: pa_id,
       img: imgPaths,
-      status: status,
+      status: "Accepted",
       appointment_date: time,
     });
     res.status(201).send({ message: "data added successfully", disease });
@@ -187,33 +188,34 @@ exports.get_disease = async (req, res) => {
 
 exports.confirm = async (req, res) => {
   try {
-    const { id, appointment_date, doc_id } = req.body;
-    if (!id || !appointment_date || !doc_id) {
-      return res
-        .status(400)
-        .json({ error: "id, appointment_date, doc_id are required" });
-    }
-    const updatedRow = await Disease.update(
-      {
-        appointment_date: appointment_date,
-        status: "Confirmed",
-      },
-      {
-        where: {
-          id,
-          doc_id,
-        },
-      }
-    );
+    const { id, appointment_date } = req.body;
+    const doc_id = req.user.id;
 
-    if (updatedRow === 0) {
+    if (!id || !doc_id) {
+      return res.status(400).json({ error: "id and doc_id are required" });
+    }
+
+    const updateFields = { status: "Confirmed" };
+
+    if (appointment_date) {
+      updateFields.appointment_date = appointment_date;
+    }
+
+    const updatedRow = await Disease.update(updateFields, {
+      where: {
+        id,
+        doc_id,
+      },
+    });
+
+    if (updatedRow[0] === 0) {
       return res.status(404).json({
-        error: "disease record not found or doc_id does not match",
+        error: "disease record not found",
       });
     }
 
     res.status(200).json({
-      message: "appointment date updated and status updated",
+      message: "appointment status updated",
     });
   } catch (error) {
     console.error("Error:", error);
@@ -223,7 +225,8 @@ exports.confirm = async (req, res) => {
 
 exports.complete = async (req, res) => {
   try {
-    const { id, doc_id } = req.body;
+    const { id } = req.body;
+    const doc_id = req.user.id;
     if (!id || !doc_id) {
       return res.status(400).json({ error: "id, doc_id are required" });
     }
