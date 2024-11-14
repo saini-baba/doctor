@@ -4,6 +4,7 @@ const db = new Sequelize("doctor", "root", "", {
   host: "localhost",
   port: 3000,
   dialect: "mysql",
+  timezone: "+05:30",
 });
 
 async function connection() {

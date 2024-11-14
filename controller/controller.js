@@ -1,8 +1,11 @@
 const Joi = require("joi");
 const bcrypt = require("bcrypt");
-const { User, Disease } = require("../model/model");
+const { User, Disease ,Cancel} = require("../model/model");
 const jwt = require("jsonwebtoken");
 const { Op, Sequelize } = require("sequelize");
+const { sendEmail } = require("../email/nodemailer");
+const { sendEmailWithopt } = require("../email/nodemailer");
+const crypto = require("crypto");
 
 const reg_schema = Joi.object({
   name: Joi.string()
@@ -33,7 +36,7 @@ const reg_schema = Joi.object({
     "any.only": "role can be doctor or patient",
     "any.required": "role is required",
   }),
-  specialization: Joi.string().optional(),
+  specialization: Joi.optional(),
 });
 
 exports.reg = async (req, res) => {
@@ -54,7 +57,7 @@ exports.reg = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await User.create({
+    const newUser = await User.create({
       name: name,
       password: hashedPassword,
       email: email,
@@ -62,7 +65,7 @@ exports.reg = async (req, res) => {
       specialization: value.specialization || null,
     });
 
-    res.status(200).send("user registered successfully");
+    res.status(200).json({ message: "user registered", user_id: newUser.id });
   } catch (error) {
     console.error("Error:", error);
     return res.status(500).send("Internal Server Error");
@@ -71,26 +74,35 @@ exports.reg = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.params;
+    const { email, password } = req.body;
 
     const foundUser = await User.findOne({ where: { email: email } });
     if (!foundUser) {
       return res.status(404).send("pls enter correct credentials");
     } else {
+      if (!foundUser.verify) {
+        return res.status(403).json({
+          message: "account is not verified",
+          user_id: foundUser.id,
+        });
+      }
       const passwordMatch = await bcrypt.compare(password, foundUser.password);
       if (!passwordMatch) {
         return res.status(404).send("pls enter correct credentials");
       }
+
       const userData = foundUser.toJSON();
       delete userData.password;
+
       const token = jwt.sign(userData, "top_secret_key", {
         expiresIn: "10h",
       });
-      res.status(200).json(token);
+
+      res.status(200).json({ token: token, role: userData.role });
     }
   } catch (error) {
-    console.error("Error in login", error);
-    res.status(500).send("pls enter correct credentials");
+    console.error("error:", error);
+    res.status(500).send("Internal Server Error");
   }
 };
 
@@ -160,8 +172,27 @@ exports.disease = async (req, res) => {
 exports.get_disease = async (req, res) => {
   try {
     const doctorId = req.user.id;
+    const { status, date } = req.params;
+
+    // Build the where condition dynamically
+    const whereCondition = { doc_id: doctorId, status: status };
+
+    // Apply date filter based on the status
+    if (date) {
+      if (status === "Accepted" || status === "Confirmed") {
+        whereCondition.appointment_date = date;
+      } else if (status === "Completed") {
+        whereCondition.updatedAt = {
+          [Op.between]: [
+            new Date(date).setHours(0, 0, 0, 0),
+            new Date(date).setHours(23, 59, 59, 999),
+          ],
+        };
+      }
+    }
+
     const diseases = await Disease.findAll({
-      where: { doc_id: doctorId },
+      where: whereCondition,
       include: [
         {
           model: User,
@@ -182,6 +213,48 @@ exports.get_disease = async (req, res) => {
     res.status(200).send({ diseases });
   } catch (error) {
     console.error("error:", error);
+    res.status(500).send({ error: "Internal Server Error" });
+  }
+};
+
+exports.slot = async (req, res) => {
+  try {
+    const doc_id = req.user.id;
+    const { date } = req.params;
+    const allSlots = [
+      "10:00 - 10:30",
+      "10:30 - 11:00",
+      "11:00 - 11:30",
+      "11:30 - 12:00",
+      "12:00 - 12:30",
+      "12:30 - 01:00",
+      "01:00 - 01:30",
+      "02:30 - 03:00",
+      "03:00 - 03:30",
+      "03:30 - 04:00",
+      "04:00 - 04:30",
+    ];
+    const takenSlotsData = await Disease.findAll({
+      where: {
+        appointment_date: date,
+        doc_id: doc_id,
+        status: "Confirmed",
+      },
+      attributes: ["slot_time"],
+    });
+    const takenSlots = takenSlotsData.map((disease) => disease.slot_time);
+    const availableSlots = allSlots.filter(
+      (slot) => !takenSlots.includes(slot)
+    );
+    res.status(200).send({
+      availableSlots,
+      message:
+        availableSlots.length === 0
+          ? "No available slots on this date"
+          : undefined,
+    });
+  } catch (error) {
+    console.error("error", error);
     res.status(500).send({ error: "Internal Server Error" });
   }
 };
@@ -281,5 +354,96 @@ exports.delete = async (req, res) => {
   } catch {
     console.error("Error:", error);
     res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+exports.verify = async (req, res) => {
+  const { user_id } = req.params;
+
+  try {
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const token = jwt.sign({ userId: user.id }, "top_secret_key", {
+      expiresIn: "10h",
+    });
+
+    const verifyUrl = `http://localhost:3001/user/${user.id}/verify/${token}`;
+    await sendEmail(user.email, "Email Verification", verifyUrl);
+
+    res.status(200).json({ message: "verification email sent" });
+  } catch (error) {
+    console.error("Error", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.confirmVerification = async (req, res) => {
+  const { user_id, token } = req.params;
+
+  try {
+    const decoded = jwt.verify(token, "top_secret_key");
+    if (decoded.userId !== parseInt(user_id)) {
+      return res.status(400).json({ message: "invalid token" });
+    }
+
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ message: "user not found" });
+    }
+
+    user.verify = true;
+    await user.save();
+
+    res.status(200).json({ message: "email verified" });
+  } catch (error) {
+    console.error("error:", error);
+    res.status(500).json({ message: "verification failed" });
+  }
+};
+
+exports.verify_opt = async (req, res) => {
+  const { user_id } = req.params;
+  try {
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const otp = crypto.randomInt(1000, 9999);
+    user.otp = otp;
+    await user.save();
+    await sendEmailWithopt(user.email, "Email Verification", otp);
+    res.status(200).json({ message: "verification email sent" });
+  } catch (error) {
+    console.error("Error", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.verifyOtp = async (req, res) => {
+  const { user_id, otp } = req.body;
+  try {
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    } else {
+      const otpExpiryDuration = 5 * 60 * 1000;
+      const otpExpired =
+        new Date() - new Date(user.updatedAt) > otpExpiryDuration;
+
+      if (user.otp !== parseInt(otp, 10) || otpExpired) {
+        return res.status(400).json({ message: "Invalid or expired OTP" });
+      } else {
+        user.otp = null;
+        user.verify = true;
+        await user.save();
+        res.status(200).json({ message: "Email verified successfully" });
+      }
+    }
+  } catch (error) {
+    console.error("Error", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
