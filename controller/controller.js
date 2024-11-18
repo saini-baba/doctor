@@ -1,6 +1,6 @@
 const Joi = require("joi");
 const bcrypt = require("bcrypt");
-const { User, Disease ,Cancel} = require("../model/model");
+const { User, Disease, Cancel } = require("../model/model");
 const jwt = require("jsonwebtoken");
 const { Op, Sequelize } = require("sequelize");
 const { sendEmail } = require("../email/nodemailer");
@@ -119,7 +119,7 @@ exports.all_doc = async (req, res) => {
     }
 
     const doctors = await User.findAll({
-      where: { role: "doctor" },
+      where: { role: "doctor", verify: true },
       attributes: [
         "id",
         "name",
@@ -133,7 +133,7 @@ exports.all_doc = async (req, res) => {
         ],
       ],
       having: Sequelize.where(Sequelize.literal("confirmedCount"), {
-        [Op.lt]: 14,
+        [Op.lt]: 11,
       }),
     });
 
@@ -173,15 +173,15 @@ exports.get_disease = async (req, res) => {
   try {
     const doctorId = req.user.id;
     const { status, date } = req.params;
-
-    // Build the where condition dynamically
     const whereCondition = { doc_id: doctorId, status: status };
 
-    // Apply date filter based on the status
+    console.log("Status:", status);
+    console.log("Date:", date);
+
     if (date) {
-      if (status === "Accepted" || status === "Confirmed") {
+      if (["Accepted", "Confirmed", "Pending"].includes(status)) {
         whereCondition.appointment_date = date;
-      } else if (status === "Completed") {
+      } else if (["Completed", "Cancelled"].includes(status)) {
         whereCondition.updatedAt = {
           [Op.between]: [
             new Date(date).setHours(0, 0, 0, 0),
@@ -190,6 +190,8 @@ exports.get_disease = async (req, res) => {
         };
       }
     }
+
+    console.log("Where Condition:", whereCondition);
 
     const diseases = await Disease.findAll({
       where: whereCondition,
@@ -212,7 +214,42 @@ exports.get_disease = async (req, res) => {
     }
     res.status(200).send({ diseases });
   } catch (error) {
-    console.error("error:", error);
+    console.error("Error fetching diseases:", error.message);
+    res.status(500).send({ error: "Internal Server Error" });
+  }
+};
+
+exports.cancel = async (req, res) => {
+  try {
+    const doctorId = req.user.id;
+    const { id, reason } = req.body;
+    const disease = await Disease.findOne({
+      where: {
+        id: id,
+        doc_id: doctorId,
+      },
+    });
+
+    if (!disease) {
+      return res.status(404).send({ message: "Disease not found" });
+    }
+
+    await disease.update({ status: "Cancelled" });
+
+    const cancelReason = `Cancel reason by doctor: ${reason}`;
+
+    await Cancel.create({
+      reason: cancelReason,
+      doc_id: doctorId,
+      patient_id: disease.patient_id,
+      disease_id: disease.id,
+    });
+    res.status(200).send({
+      message:
+        "Disease status updated to Cancelled and cancellation reason recorded",
+    });
+  } catch (error) {
+    console.error("Error fetching diseases:", error.message);
     res.status(500).send({ error: "Internal Server Error" });
   }
 };
@@ -261,18 +298,31 @@ exports.slot = async (req, res) => {
 
 exports.confirm = async (req, res) => {
   try {
-    const { id, appointment_date } = req.body;
+    const { id, slot } = req.body;
     const doc_id = req.user.id;
+    console.log(id, doc_id, slot);
 
     if (!id || !doc_id) {
       return res.status(400).json({ error: "id and doc_id are required" });
     }
 
-    const updateFields = { status: "Confirmed" };
+    const existingRecord = await Disease.findOne({
+      where: {
+        id,
+        doc_id,
+      },
+    });
 
-    if (appointment_date) {
-      updateFields.appointment_date = appointment_date;
+    if (!existingRecord) {
+      return res.status(404).json({
+        error: "disease record not found",
+      });
     }
+
+    const updateFields = {
+      status: existingRecord.slot_time === slot ? "Confirmed" : "Pending",
+      slot_time: slot,
+    };
 
     const updatedRow = await Disease.update(updateFields, {
       where: {
@@ -283,12 +333,12 @@ exports.confirm = async (req, res) => {
 
     if (updatedRow[0] === 0) {
       return res.status(404).json({
-        error: "disease record not found",
+        error: "Failed to update disease record",
       });
     }
 
     res.status(200).json({
-      message: "appointment status updated",
+      message: "Appointment status updated",
     });
   } catch (error) {
     console.error("Error:", error);
