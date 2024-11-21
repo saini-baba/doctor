@@ -11,5 +11,6 @@ router.post(
   middleware.uploadMiddleware,
   controler.disease
 );
+router.get("/dis-data/:date/:status", middleware.auth, controler.all_dis);
 router.delete("/delete", middleware.auth, controler.delete);
 module.exports = router;

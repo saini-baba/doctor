@@ -150,7 +150,7 @@ exports.all_doc = async (req, res) => {
 
 exports.disease = async (req, res) => {
   try {
-    const { doc_id, time } = req.body;
+    const { doc_id, time, slot, description } = req.body;
     const pa_id = req.user.id;
     const imgPaths = req.body.newpaths;
     console.log("controller", imgPaths);
@@ -159,10 +159,14 @@ exports.disease = async (req, res) => {
       doc_id: doc_id,
       patient_id: pa_id,
       img: imgPaths,
+      description: description,
+      slot_time: slot,
       status: "Accepted",
       appointment_date: time,
     });
-    res.status(201).send({ message: "data added successfully", disease });
+    res
+      .status(201)
+      .send({ message: "Appointment booked successfully", disease });
   } catch (error) {
     console.error("error", error);
     res.status(500).send({ error: "error:", error });
@@ -174,9 +178,6 @@ exports.get_disease = async (req, res) => {
     const doctorId = req.user.id;
     const { status, date } = req.params;
     const whereCondition = { doc_id: doctorId, status: status };
-
-    console.log("Status:", status);
-    console.log("Date:", date);
 
     if (date) {
       if (["Accepted", "Confirmed", "Pending"].includes(status)) {
@@ -192,26 +193,80 @@ exports.get_disease = async (req, res) => {
     }
 
     console.log("Where Condition:", whereCondition);
+    const includeOptions = [
+      {
+        model: User,
+        as: "Doctor",
+        attributes: ["name"],
+      },
+      {
+        model: User,
+        as: "Patient",
+        attributes: ["name"],
+      },
+      {
+        model: Cancel,
+        as: "CancellationReason", // Use the correct alias
+        attributes: ["reason"],
+        required: false, // Optional, only fetch if cancellation exists
+      },
+    ];
 
     const diseases = await Disease.findAll({
       where: whereCondition,
-      include: [
-        {
-          model: User,
-          as: "Doctor",
-          attributes: ["name"],
-        },
-        {
-          model: User,
-          as: "Patient",
-          attributes: ["name"],
-        },
-      ],
+      include: includeOptions,
     });
 
     if (!diseases || diseases.length === 0) {
       return res.status(404).send({ message: "No appointment" });
     }
+
+    res.status(200).send({ diseases });
+  } catch (error) {
+    console.error("Error fetching diseases:", error.message);
+    res.status(500).send({ error: "Internal Server Error" });
+  }
+};
+
+exports.all_dis = async (req, res) => {
+  try {
+    const patId = req.user.id;
+    const { status, date } = req.params;
+    const whereCondition = {
+      patient_id: patId,
+      status: status,
+      createdAt: {
+        [Op.between]: [
+          new Date(date).setHours(0, 0, 0, 0),
+          new Date(date).setHours(23, 59, 59, 999),
+        ],
+      },
+    };
+
+    // console.log("Where Condition:", whereCondition);
+    const includeOptions = [
+      {
+        model: User,
+        as: "Doctor",
+        attributes: ["name"],
+      },
+      {
+        model: Cancel,
+        as: "CancellationReason",
+        attributes: ["reason"],
+        required: false,
+      },
+    ];
+
+    const diseases = await Disease.findAll({
+      where: whereCondition,
+      include: includeOptions,
+    });
+
+    if (!diseases || diseases.length === 0) {
+      return res.status(404).send({ message: "No appointment" });
+    }
+
     res.status(200).send({ diseases });
   } catch (error) {
     console.error("Error fetching diseases:", error.message);
@@ -221,26 +276,33 @@ exports.get_disease = async (req, res) => {
 
 exports.cancel = async (req, res) => {
   try {
-    const doctorId = req.user.id;
+    const Id = req.user.id;
+    const role = req.user.role;
     const { id, reason } = req.body;
     const disease = await Disease.findOne({
       where: {
         id: id,
-        doc_id: doctorId,
+        [role === "patient" ? "patient_id" : "doc_id"]: Id,
       },
     });
+
+    console.log(disease);
 
     if (!disease) {
       return res.status(404).send({ message: "Disease not found" });
     }
 
     await disease.update({ status: "Cancelled" });
-
-    const cancelReason = `Cancel reason by doctor: ${reason}`;
+    let cancelReason;
+    if (role === "doctor") {
+      cancelReason = `Cancel reason by doctor: ${reason}`;
+    } else {
+      cancelReason = `Cancel reason by patient: ${reason}`;
+    }
 
     await Cancel.create({
       reason: cancelReason,
-      doc_id: doctorId,
+      doc_id: disease.doc_id,
       patient_id: disease.patient_id,
       disease_id: disease.id,
     });
@@ -256,21 +318,31 @@ exports.cancel = async (req, res) => {
 
 exports.slot = async (req, res) => {
   try {
-    const doc_id = req.user.id;
-    const { date } = req.params;
+    const role = req.user.role;
+    let doc_id;
+    const { date, id } = req.params;
+    if (role == "doctor") {
+      doc_id = req.user.id;
+    } else {
+      doc_id = id;
+    }
+
     const allSlots = [
-      "10:00 - 10:30",
-      "10:30 - 11:00",
-      "11:00 - 11:30",
-      "11:30 - 12:00",
-      "12:00 - 12:30",
-      "12:30 - 01:00",
-      "01:00 - 01:30",
-      "02:30 - 03:00",
-      "03:00 - 03:30",
-      "03:30 - 04:00",
-      "04:00 - 04:30",
+      "10:00 AM - 10:30 AM",
+      "10:30 AM - 11:00 AM",
+      "11:00 AM - 11:30 AM",
+      "11:30 AM - 12:00 PM",
+      "12:00 PM - 12:30 PM",
+      "12:30 PM - 01:00 PM",
+      "02:00 PM - 02:30 PM",
+      "03:00 PM - 03:30 PM",
+      "03:30 PM - 04:00 PM",
+      "04:00 PM - 04:30 PM",
+      "04:30 PM - 05:00 PM",
     ];
+    if (!doc_id) {
+      return res.status(400).send({ error: "Doctor ID is required" });
+    }
     const takenSlotsData = await Disease.findAll({
       where: {
         appointment_date: date,
@@ -299,17 +371,18 @@ exports.slot = async (req, res) => {
 exports.confirm = async (req, res) => {
   try {
     const { id, slot } = req.body;
-    const doc_id = req.user.id;
-    console.log(id, doc_id, slot);
+    const role = req.user.role;
+    const user_id = req.user.id;
+    // console.log(id, doc_id, slot);
 
-    if (!id || !doc_id) {
+    if (!id || !user_id) {
       return res.status(400).json({ error: "id and doc_id are required" });
     }
 
     const existingRecord = await Disease.findOne({
       where: {
         id,
-        doc_id,
+        [role === "patient" ? "patient_id" : "doc_id"]: user_id,
       },
     });
 
@@ -318,16 +391,23 @@ exports.confirm = async (req, res) => {
         error: "disease record not found",
       });
     }
-
-    const updateFields = {
-      status: existingRecord.slot_time === slot ? "Confirmed" : "Pending",
-      slot_time: slot,
-    };
+    let updateFields;
+    if (role === "doctor") {
+      updateFields = {
+        status: existingRecord.slot_time === slot ? "Confirmed" : "Pending",
+        slot_time: slot,
+      };
+    } else {
+      updateFields = {
+        status: "Confirmed",
+        slot_time: slot,
+      };
+    }
 
     const updatedRow = await Disease.update(updateFields, {
       where: {
         id,
-        doc_id,
+        [role === "patient" ? "patient_id" : "doc_id"]: user_id,
       },
     });
 

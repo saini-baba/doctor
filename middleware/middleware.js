@@ -72,6 +72,35 @@ exports.doc_auth = async (req, res, next) => {
   }
 };
 
+exports.user_auth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).send("No token found");
+    }
+    const token = authHeader.split(" ")[1];
+
+    jwt.verify(token, "top_secret_key", async (err, decoded) => {
+      if (err) {
+        return res.status(401).send("invalid token");
+      }
+
+      const foundUser = await User.findOne({
+        where: { email: decoded.email },
+      });
+      if (!foundUser) {
+        return res.status(404).send("user not found");
+      } else {
+        req.user = foundUser;
+        next();
+      }
+      //   console.log(token);
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    return res.status(500).send("Internal Server Error");
+  }
+};
 //multer
 
 const storage = multer.diskStorage({
