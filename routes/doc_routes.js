@@ -10,6 +10,6 @@ router.get(
 );
 
 router.patch("/complete", middleware.doc_auth, controler.complete);
-
+router.post("/data", middleware.doc_auth, controler.doc_data);
 
 module.exports = router;

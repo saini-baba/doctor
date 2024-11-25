@@ -1,6 +1,7 @@
 const { DataTypes } = require("sequelize");
 const database = require("../db/db");
 
+// User table with new fields
 const User = database.db.define(
   "user",
   {
@@ -18,20 +19,10 @@ const User = database.db.define(
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM("doctor", "patient"),
+      type: DataTypes.ENUM("doctor", "patient", "admin"),
       allowNull: false,
     },
-    specialization: {
-      type: DataTypes.ENUM(
-        "Cosmetic dermatology",
-        "Dermatopathology",
-        "Mohs surgery",
-        "Pediatric dermatology",
-        "Immunodermatology",
-        "Trichology"
-      ),
-      allowNull: true,
-    },
+
     verify: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -41,8 +32,42 @@ const User = database.db.define(
       type: DataTypes.INTEGER,
       allowNull: true,
     },
+    doc_verification: {
+      type: DataTypes.ENUM("verified", "under process", "rejected"),
+      allowNull: false,
+      defaultValue: "under process",
+    },
   },
+  {
+    paranoid: true,
+    timestamps: true,
+  }
+);
 
+const User_Data = database.db.define(
+  "user_data",
+  {
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: User,
+        key: "id",
+      },
+    },
+    gender: {
+      type: DataTypes.ENUM("Male", "Female", "Other"),
+      allowNull: false,
+    },
+    location: {
+      type: DataTypes.JSON,
+      allowNull: false,
+    },
+    age: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+  },
   {
     paranoid: true,
     timestamps: true,
@@ -89,26 +114,18 @@ const Disease = database.db.define(
     slot_time: {
       type: DataTypes.STRING,
       allowNull: false,
-      validate: {
-        isIn: [
-          [
-            "10:00 AM - 10:30 AM",
-            "10:30 AM - 11:00 AM",
-            "11:00 AM - 11:30 AM",
-            "11:30 AM - 12:00 PM",
-            "12:00 PM - 12:30 PM",
-            "12:30 PM - 01:00 PM",
-            "02:00 PM - 02:30 PM",
-            "03:00 PM - 03:30 PM",
-            "03:30 PM - 04:00 PM",
-            "04:00 PM - 04:30 PM",
-            "04:30 PM - 05:00 PM",
-          ],
-        ],
-      },
     },
     description: {
       type: DataTypes.STRING,
+      allowNull: true,
+    },
+    // New columns
+    prescription: {
+      type: DataTypes.STRING,
+      allowNull: true, // You can adjust this based on your needs
+    },
+    next_appointment_date: {
+      type: DataTypes.DATEONLY,
       allowNull: true,
     },
   },
@@ -118,6 +135,7 @@ const Disease = database.db.define(
   }
 );
 
+// Cancel table remains the same
 const Cancel = database.db.define(
   "cancel",
   {
@@ -156,23 +174,114 @@ const Cancel = database.db.define(
   }
 );
 
-// User associations
-User.hasMany(Disease, { foreignKey: "doc_id", as: "Doctor" }); // For doctor
-User.hasMany(Disease, { foreignKey: "patient_id", as: "Patient" }); // For patient
+const Slot = database.db.define(
+  "slot",
+  {
+    doctor_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: User,
+        key: "id",
+      },
+    },
+    slot: {
+      type: DataTypes.JSON, // Use JSON to store array of slot strings
+      allowNull: false,
+    },
+    day_off: {
+      type: DataTypes.JSON, // Use JSON to store array of day names
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.ENUM("available", "on leave"), // Fix ENUM values
+      allowNull: false,
+      defaultValue: "available",
+    },
+    leave_start_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    leave_end_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    available_time: {
+      type: DataTypes.JSON, // Store start and end times as JSON
+      allowNull: false,
+    },
+    lunch_time: {
+      type: DataTypes.JSON,
+      allowNull: false,
+    },
+    fee: {
+      type: DataTypes.FLOAT,
+      allowNull: false,
+    },
+    gender: {
+      type: DataTypes.ENUM("Male", "Female", "Other"),
+      allowNull: false,
+    },
+    location: {
+      type: DataTypes.JSON,
+      allowNull: false,
+    },
+    age: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+    experience: {
+      type: DataTypes.FLOAT,
+      allowNull: false, // Optional field
+    },
+    license_number: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
+    },
+    specialization: {
+      type: DataTypes.ENUM(
+        "Cosmetic dermatology",
+        "Dermatopathology",
+        "Mohs surgery",
+        "Pediatric dermatology",
+        "Immunodermatology",
+        "Trichology"
+      ),
+      allowNull: false,
+    },
+  },
+  {
+    paranoid: true,
+    timestamps: true,
+  }
+);
 
-// Disease associations
-Disease.belongsTo(User, { foreignKey: "doc_id", as: "Doctor" }); // For doctor
-Disease.belongsTo(User, { foreignKey: "patient_id", as: "Patient" }); // For patient
+// Associations
+User.hasMany(Disease, { foreignKey: "doc_id", as: "DoctorDiseases" });
+User.hasMany(Disease, { foreignKey: "patient_id", as: "PatientDiseases" });
+
+Disease.belongsTo(User, { foreignKey: "doc_id", as: "Doctor" });
+Disease.belongsTo(User, { foreignKey: "patient_id", as: "Patient" });
 
 User.hasMany(Cancel, { foreignKey: "doc_id", as: "CancelledByDoctor" });
 User.hasMany(Cancel, { foreignKey: "patient_id", as: "CancelledByPatient" });
+
 Disease.hasOne(Cancel, { foreignKey: "disease_id", as: "CancellationReason" });
+
 Cancel.belongsTo(User, { foreignKey: "doc_id", as: "Doctor" });
 Cancel.belongsTo(User, { foreignKey: "patient_id", as: "Patient" });
 Cancel.belongsTo(Disease, { foreignKey: "disease_id", as: "Disease" });
 
+// New Slot table associations
+User.hasMany(Slot, { foreignKey: "doctor_id", as: "Slots" });
+Slot.belongsTo(User, { foreignKey: "doctor_id", as: "Doctor" });
+
+// Sync all tables
 User.sync();
 Disease.sync();
 Cancel.sync();
+Slot.sync();
+User_Data.sync();
 
-module.exports = { User, Disease, Cancel };
+module.exports = { User, Disease, Cancel, Slot, User_Data };
