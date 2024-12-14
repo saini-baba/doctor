@@ -58,6 +58,8 @@ exports.doc_auth = async (req, res, next) => {
         return res.status(404).send("user not found");
       } else {
         req.user = foundUser;
+   
+        
         if (foundUser.role === "doctor") {
           next();
         } else {

@@ -497,35 +497,115 @@ exports.all_doc = async (req, res) => {
     if (!date) {
       return res.status(400).json({ message: "Date is required" });
     }
+
     const parsedDate = new Date(date);
     if (isNaN(parsedDate)) {
       return res.status(400).json({ message: "Invalid date format" });
     }
 
-    const doctors = await User.findAll({
-      where: { role: "doctor", verify: true },
-      attributes: [
-        "id",
-        "name",
-        "email",
-        "specialization",
-        [
-          Sequelize.literal(
-            `(SELECT COUNT(*) FROM diseases WHERE diseases.doc_id = user.id AND diseases.status = 'Confirmed' AND DATE(diseases.appointment_date) = '${date}')`
-          ),
-          "confirmedCount",
-        ],
-      ],
-      having: Sequelize.where(Sequelize.literal("confirmedCount"), {
-        [Op.lt]: 11,
-      }),
+    const weekdayName = parsedDate.toLocaleDateString("en-US", {
+      weekday: "long",
     });
 
-    if (!doctors.length) {
-      return res.status(404).json({ message: "no doctors" });
-    }
+    // Step 1: Get all confirmed appointments for the given date
+    // Step 1: Fetch confirmed appointments
+    const confirmedAppointments = await Disease.findAll({
+      where: {
+        status: "Confirmed",
+        appointment_date: date,
+      },
+      attributes: ["doc_id", "slot_time"],
+      raw: true, // Return plain JavaScript objects
+    });
 
-    return res.status(200).json(doctors);
+    // Step 2: Group confirmed appointments by `doc_id`
+    const confirmedByDoctor = confirmedAppointments.reduce(
+      (acc, appointment) => {
+        if (!acc[appointment.doc_id]) {
+          acc[appointment.doc_id] = new Set();
+        }
+        acc[appointment.doc_id].add(appointment.slot_time);
+        return acc;
+      },
+      {}
+    );
+
+    // Step 3: Fetch all slots from the Slot table
+    const slotEntries = await Slot.findAll({
+      attributes: ["doctor_id", "slot", "day_off"],
+      raw: true,
+    });
+
+    // Step 4: Filter out confirmed slots from available slots
+    const availableSlots = slotEntries
+      .map(({ doctor_id, slot, day_off }) => {
+        const parsedSlots = JSON.parse(slot);
+        if (day_off === weekdayName) return null;
+        // Remove slots that are already confirmed for this doctor
+        const filteredSlots = parsedSlots.filter((slotTime) => {
+          return !(
+            confirmedByDoctor[doctor_id] &&
+            confirmedByDoctor[doctor_id].has(slotTime)
+          );
+        });
+
+        // Only return doctors with available slots, else return null
+        return filteredSlots.length > 0
+          ? { doctor_id, availableSlots: filteredSlots }
+          : null;
+      })
+      .filter(Boolean);
+    // Step 6: Count available slots by doctor_id
+    const doctorSlotCount = availableSlots.reduce(
+      (acc, { doctor_id, availableSlots }) => {
+        acc[doctor_id] = availableSlots.length;
+        return acc;
+      },
+      {}
+    );
+
+    // Step 7: Fetch doctor data from `Slot` and `User` tables, filter by verification
+    const doctorsData = await Slot.findAll({
+      where: {
+        doctor_id: Object.keys(doctorSlotCount),
+      },
+      attributes: [
+        "doctor_id",
+        "fee",
+        "gender",
+        "location",
+        "age",
+        "experience",
+        "specialization",
+      ],
+      include: [
+        {
+          model: User,
+          as: "Doctor",
+          attributes: ["name", "email", "verify"],
+          where: {
+            verify: true, // Only include verified doctors
+          },
+        },
+      ],
+      raw: true,
+      nest: true, // Ensures nested objects for `Doctor` data
+    });
+
+    // Step 8: Combine available slots with doctor data
+    const result = doctorsData.map((doc) => ({
+      doctor_id: doc.doctor_id,
+      name: doc.Doctor.name,
+      email: doc.Doctor.email,
+      fee: doc.fee,
+      gender: doc.gender,
+      location: doc.location,
+      age: doc.age,
+      experience: doc.experience,
+      specialization: doc.specialization,
+      availableSlots: doctorSlotCount[doc.doctor_id] || 0, // Slot count
+    }));
+    return res.status(200).json(result);
   } catch (error) {
     console.error("Error:", error);
     return res.status(500).json({ message: "Internal Server Error" });
@@ -711,19 +791,16 @@ exports.slot = async (req, res) => {
       doc_id = id;
     }
 
-    const allSlots = [
-      "10:00 AM - 10:30 AM",
-      "10:30 AM - 11:00 AM",
-      "11:00 AM - 11:30 AM",
-      "11:30 AM - 12:00 PM",
-      "12:00 PM - 12:30 PM",
-      "12:30 PM - 01:00 PM",
-      "02:00 PM - 02:30 PM",
-      "03:00 PM - 03:30 PM",
-      "03:30 PM - 04:00 PM",
-      "04:00 PM - 04:30 PM",
-      "04:30 PM - 05:00 PM",
-    ];
+    const allSlots = await Slot.findOne({
+      where: { doctor_id: doc_id },
+      attributes: ["slot"],
+    });
+
+    if (!allSlots.slot) {
+      return res
+        .status(404)
+        .json({ message: "No slots found for this doctor." });
+    }
     if (!doc_id) {
       return res.status(400).send({ error: "Doctor ID is required" });
     }
@@ -736,9 +813,11 @@ exports.slot = async (req, res) => {
       attributes: ["slot_time"],
     });
     const takenSlots = takenSlotsData.map((disease) => disease.slot_time);
-    const availableSlots = allSlots.filter(
-      (slot) => !takenSlots.includes(slot)
-    );
+    const slots =
+      typeof allSlots.slot === "string"
+        ? JSON.parse(allSlots.slot)
+        : allSlots.slot;
+    const availableSlots = slots.filter((slot) => !takenSlots.includes(slot));
     res.status(200).send({
       availableSlots,
       message:
@@ -757,7 +836,7 @@ exports.confirm = async (req, res) => {
     const { id, slot } = req.body;
     const role = req.user.role;
     const user_id = req.user.id;
-    // console.log(id, doc_id, slot);
+    console.log(id,slot);
 
     if (!id || !user_id) {
       return res.status(400).json({ error: "id and doc_id are required" });
@@ -812,13 +891,15 @@ exports.confirm = async (req, res) => {
 
 exports.complete = async (req, res) => {
   try {
-    const { id } = req.body;
+    const { id, prescription, next_appointment_date } = req.body;
     const doc_id = req.user.id;
     if (!id || !doc_id) {
       return res.status(400).json({ error: "id, doc_id are required" });
     }
     const updatedRow = await Disease.update(
       {
+        prescription,
+        next_appointment_date: next_appointment_date || null,
         status: "Completed",
       },
       {

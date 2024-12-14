@@ -190,7 +190,7 @@ const Slot = database.db.define(
       allowNull: false,
     },
     day_off: {
-      type: DataTypes.JSON, // Use JSON to store array of day names
+      type: DataTypes.STRING, // Use JSON to store array of day names
       allowNull: true,
     },
     status: {

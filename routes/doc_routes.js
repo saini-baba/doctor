@@ -11,5 +11,5 @@ router.get(
 
 router.patch("/complete", middleware.doc_auth, controler.complete);
 router.post("/data", middleware.doc_auth, controler.doc_data);
-
+// router.patch("/complete", middleware.doc_auth, controler.complete);
 module.exports = router;
